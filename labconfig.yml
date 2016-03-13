@@ -1,0 +1,9 @@
+OPENSTACK:
+    configs:
+        default_password: 'changeme'
+    nodes:
+        controller:
+            node_name: 'controller'
+            management_ip: '10.0.0.11'
+            public_ip: '203.0.113.11'
+        compute1:

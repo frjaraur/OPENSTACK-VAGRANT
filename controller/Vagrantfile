@@ -1,30 +1,46 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
-# All Vagrant configuration is done below. The "2" in Vagrant.configure
-# configures the configuration version (we support older styles for
-# backwards compatibility). Please don't change it unless you know what
-# you're doing.
-Vagrant.configure(2) do |config|
-  config.vm.hostname = "controller"
-  # The most common configuration options are documented and commented below.
-  # For a complete reference, please see the online documentation at
-  # https://docs.vagrantup.com.
 
-  # Every Vagrant development environment requires a box. You can search for
-  # boxes at https://atlas.hashicorp.com/search.
+require 'yaml'
+
+current_dir    = File.dirname(File.expand_path(__FILE__))
+configs        = YAML.load_file("#{current_dir}/../labconfig.yml")
+openstack_configs = configs['OPENSTACK']
+default_password=configs['OPENSTACK']['configs']['default_password']
+node_config=openstack_configs['nodes']['controller']
+
+
+#NOT READY YET
+#all_hosts = ["10.0.0.11 controller", "10.0.0.31 compute1","10.0.0.41 block1","10.0.0.51 storage1"]
+#all_hosts.each { |x| puts x }
+
+create_hostsfile = <<HOSTFILE
+echo "127.0.1.1 localhost" >  /etc/hosts
+echo "10.0.0.11 controller" | tee -a /etc/hosts
+echo "10.0.0.31 compute1" | tee -a /etc/hosts
+echo "10.0.0.41 block1" | tee -a /etc/hosts
+echo "10.0.0.51 storage1" | tee -a /etc/hosts
+HOSTFILE
+
+
+Vagrant.configure(2) do |config|
+  config.vm.hostname = node_config['node_name']
   config.vm.box = "ubuntu/trusty64"
 
   config.vm.provider "virtualbox" do |vb|
-     vb.memory = "1024"
+     vb.memory = "2048"
+  end
+  if Vagrant.has_plugin?("vagrant-timezone")
+    config.timezone.value = :host
   end
 
+  config.vm.provision :shell, :inline => create_hostsfile
 
-
-  config.vm.network "private_network", ip: "10.0.0.11",
+  config.vm.network "private_network", ip: node_config['management_ip'],
     virtualbox__intnet: "OPENSTACK_MANAGEMENT"
 
-  config.vm.network "private_network", ip: "203.0.113.11",
+  config.vm.network "private_network", ip: node_config['public_ip'],
     virtualbox__intnet: "OPENSTACK_PUBLIC"
 
   config.vm.network "public_network",
@@ -33,60 +49,14 @@ Vagrant.configure(2) do |config|
   config.vm.network "forwarded_port", guest: 80, host: 8080
   #config.vm.network "forwarded_port", guest: 22, host: 2222
 
-  config.vm.provision "shell", inline: <<-SHELL
-    sudo apt-get install software-properties-common -y
-    sudo add-apt-repository -y cloud-archive:liberty
-    sudo apt-get update -y && apt-get dist-upgrade -y
-    sudo apt-get install chrony -y &&  service chrony restart
-    sudo apt-get install python-openstackclient
-    sudo apt-get install mariadb-server python-pymysql
-  SHELL
-  config.vm.provision "file", source: "../configfiles/mysqld_openstack.cnf", destination: "/etc/mysql/conf.d/mysqld_openstack.cnf"
-  config.vm.provision "shell", inline: <<-MYSQL
-    sudo chown mysql:mysql/etc/mysql/conf.d/mysqld_openstack.cnf
-    sudo service mysql restart
-  MYSQL
+  # PROVISION LONGFILES
+  config.vm.provision "file", source: "../configfiles/mysqld_openstack.cnf", destination: "/tmp/mysqld_openstack.cnf"
+  config.vm.provision "file", source: "../configfiles/wsgi-keystone.conf", destination: "/tmp/wsgi-keystone.conf"
+  config.vm.provision "fix-no-tty", type: "shell" do |s|
+      s.privileged = false
+      s.inline = "sudo sed -i '/tty/!s/mesg n/tty -s \\&\\& mesg n/' /root/.profile"
+  end
 
-  # config.vm.network "private_network", ip: "192.168.33.10"
+  config.vm.provision "shell", path: "../provision/install_controller.sh", :args => [default_password, node_config['management_ip'], node_config['node_name']]
 
-  # Create a public network, which generally matched to bridged network.
-  # Bridged networks make the machine appear as another physical device on
-  # your network.
-  # config.vm.network "public_network"
-
-  # Share an additional folder to the guest VM. The first argument is
-  # the path on the host to the actual folder. The second argument is
-  # the path on the guest to mount the folder. And the optional third
-  # argument is a set of non-required options.
-  # config.vm.synced_folder "../data", "/vagrant_data"
-
-  # Provider-specific configuration so you can fine-tune various
-  # backing providers for Vagrant. These expose provider-specific options.
-  # Example for VirtualBox:
-  #
-  # config.vm.provider "virtualbox" do |vb|
-  #   # Display the VirtualBox GUI when booting the machine
-  #   vb.gui = true
-  #
-  #   # Customize the amount of memory on the VM:
-  #   vb.memory = "1024"
-  # end
-  #
-  # View the documentation for the provider you are using for more
-  # information on available options.
-
-  # Define a Vagrant Push strategy for pushing to Atlas. Other push strategies
-  # such as FTP and Heroku are also available. See the documentation at
-  # https://docs.vagrantup.com/v2/push/atlas.html for more information.
-  # config.push.define "atlas" do |push|
-  #   push.app = "YOUR_ATLAS_USERNAME/YOUR_APPLICATION_NAME"
-  # end
-
-  # Enable provisioning with a shell script. Additional provisioners such as
-  # Puppet, Chef, Ansible, Salt, and Docker are also available. Please see the
-  # documentation for more information about their specific syntax and use.
-  # config.vm.provision "shell", inline: <<-SHELL
-  #   sudo apt-get update
-  #   sudo apt-get install -y apache2
-  # SHELL
 end
