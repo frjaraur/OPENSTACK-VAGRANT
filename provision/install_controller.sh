@@ -263,7 +263,7 @@ echo "export OS_IMAGE_API_VERSION=2" | tee -a admin-openrc.sh demo-openrc.sh
 
 # Download cirros image for testing :)
 CIRROS_VERSION="$(wget http://download.cirros-cloud.net/version/released -qO -)"
-if [ ! -n "${CIRROS_VERSION}"]
+if [ ! -n "${CIRROS_VERSION}" ]
 then
   echo "WARNING: Could not download a valid cirros version ... "
   echo "WRNING: Image testing could not be executed ..."
