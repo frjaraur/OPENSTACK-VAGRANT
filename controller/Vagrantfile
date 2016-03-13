@@ -2,6 +2,12 @@
 # vi: set ft=ruby :
 
 
+#TODO
+# - DEFAULT_PASSWORD for every service in yml.
+# - GLANCE_STORAGE variable in yml.
+# - SERVICES definitions with node configuration for each one.
+# - hosts file should be created using configuration from yml.
+
 require 'yaml'
 
 current_dir    = File.dirname(File.expand_path(__FILE__))
@@ -52,6 +58,8 @@ Vagrant.configure(2) do |config|
   # PROVISION LONGFILES
   config.vm.provision "file", source: "../configfiles/mysqld_openstack.cnf", destination: "/tmp/mysqld_openstack.cnf"
   config.vm.provision "file", source: "../configfiles/wsgi-keystone.conf", destination: "/tmp/wsgi-keystone.conf"
+  config.vm.provision "file", source: "../configfiles/admin-openrc.sh", destination: "/tmp/admin-openrc.sh"
+  config.vm.provision "file", source: "../configfiles/demo-openrc.sh", destination: "/tmp/demo-openrc.sh"
   config.vm.provision "fix-no-tty", type: "shell" do |s|
       s.privileged = false
       s.inline = "sudo sed -i '/tty/!s/mesg n/tty -s \\&\\& mesg n/' /root/.profile"

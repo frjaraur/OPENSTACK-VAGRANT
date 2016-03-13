@@ -54,10 +54,14 @@ rabbitmqctl add_user openstack ${DEFAULT_PASSWORD}
 rabbitmqctl set_permissions openstack ".*" ".*" ".*"
 
 
+
+
+# -------------------- KEYSTONE ------------------ #
+
 echo "OPENSTACK KEYSTONE"
 ${MYSQLCMD} "DROP DATABASE IF EXISTS keystone;"
 ${MYSQLCMD} "CREATE DATABASE keystone;"
-${MYSQLCMD} "DROP USER IF EXISTS keystone;"
+#${MYSQLCMD} "DROP USER IF EXISTS keystone;"
 ${MYSQLCMD} "GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'localhost' IDENTIFIED BY '${DEFAULT_PASSWORD}';"
 ${MYSQLCMD} "GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%' IDENTIFIED BY '${DEFAULT_PASSWORD}';"
 
@@ -93,9 +97,10 @@ provider = uuid
 driver = memcache
 
 [revoke]
-driver = sql"
+driver = sql
 EOF
 
+#Populate database
 su -s /bin/sh -c "keystone-manage db_sync" keystone
 
 rm -f /var/lib/keystone/keystone.db
@@ -103,8 +108,12 @@ rm -f /var/lib/keystone/keystone.db
 
 #BACKUP original /etc/apache2/apache2.conf file
 cp -p /etc/apache2/apache2.conf /etc/apache2/apache2.conf.original
-sed -i "s/^ServerName.*$/ServerName ${CONTROLLER_NAME}/" /etc/apache2/apache2.conf
-
+if [ $(grep -c ServerName /etc/apache2/apache2.conf) -ne 0 ]
+then
+  sed -i "s/^ServerName.*$/ServerName ${CONTROLLER_NAME}/" /etc/apache2/apache2.conf
+else
+  echo "ServerName ${CONTROLLER_NAME}" >> /etc/apache2/apache2.conf
+fi
 mv /tmp/wsgi-keystone.conf /etc/apache2/sites-available/wsgi-keystone.conf
 ln -s /etc/apache2/sites-available/wsgi-keystone.conf /etc/apache2/sites-enabled
 service apache2 restart
@@ -115,8 +124,154 @@ export OS_TOKEN=${ADMIN_TOKEN}
 export OS_URL=http://${CONTROLLER_NAME}:35357/v3
 export OS_IDENTITY_API_VERSION=3
 
-echo "OPENSTACK IDENTITY ENDPOINTS"
+echo "OPENSTACK IDENTITY SERVICE"
 openstack service create --name keystone --description "OpenStack Identity" identity
+
+echo "OPENSTACK IDENTITY ENDPOINTS"
 openstack endpoint create --region RegionOne identity public http://${CONTROLLER_NAME}:5000/v2.0
 openstack endpoint create --region RegionOne identity internal http://${CONTROLLER_NAME}:5000/v2.0
 openstack endpoint create --region RegionOne identity admin http://${CONTROLLER_NAME}:35357/v2.0
+
+
+echo "OPENSTACK IDENTITY CREATE ADMIN PROJECT"
+openstack project create --domain default --description "Admin Project" admin
+
+echo "OPENSTACK IDENTITY CREATE SERVICE PROJECT"
+openstack project create --domain default --description "Service Project" service
+
+echo "OPENSTACK IDENTITY CREATE DEMO PROJECT"
+openstack project create --domain default --description "Demo Project" demo
+
+echo "OPENSTACK IDENTITY CREATE USERS AND ROLES FOR PROJECTS"
+# ROLES
+openstack role create admin
+openstack role create user
+
+#USERS
+openstack user create --domain default --password ${DEFAULT_PASSWORD} admin
+openstack role add --project admin --user admin admin
+
+openstack user create --domain default --password ${DEFAULT_PASSWORD} demo
+openstack role add --project demo --user demo user
+
+
+#Clean temp configs
+#From /etc/keystone/keystone-paste.ini remove admin_token_auth from the [pipeline:public_api],
+#[pipeline:admin_api], and [pipeline:api_v3] sections.
+unset OS_TOKEN OS_URL
+
+mv /tmp/admin-openrc.sh ${HOME}/admin-openrc.sh && chmod 700 ${HOME}/admin-openrc.sh
+sed -i "s/^ServerName.*$/ServerName ${CONTROLLER_NAME}/" ${HOME}/admin-openrc.sh
+sed -i "s/ADMIN_PASS/${DEFAULT_PASSWORD}/" ${HOME}/admin-openrc.sh
+sed -i "s/CONTROLLER_NAME/${CONTROLLER_NAME}/" ${HOME}/admin-openrc.sh
+
+mv /tmp/demo-openrc.sh ${HOME}/demo-openrc.sh && chmod 700 ${HOME}/demo-openrc.sh
+sed -i "s/DEMO_PASS/${DEFAULT_PASSWORD}/" ${HOME}/demo-openrc.sh
+sed -i "s/CONTROLLER_NAME/${CONTROLLER_NAME}/" ${HOME}/demo-openrc.sh
+
+
+
+
+# -------------------- GLANCE ------------------ #
+
+echo "OPENSTACK GLANCE"
+${MYSQLCMD} "DROP DATABASE IF EXISTS glance;"
+${MYSQLCMD} "CREATE DATABASE glance;"
+#${MYSQLCMD} "DROP USER IF EXISTS glance;"
+${MYSQLCMD} "GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'localhost' IDENTIFIED BY '${DEFAULT_PASSWORD}';"
+${MYSQLCMD} "GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'%' IDENTIFIED BY '${DEFAULT_PASSWORD}';"
+
+echo "OPENSTACK GLANCE SERVICE"
+openstack service create --name glance --description "OpenStack Image service" image
+
+echo "OPENSTACK GLANCE CREATE USERS"
+openstack user create --domain default --password ${DEFAULT_PASSWORD} glance
+openstack role add --project service --user glance admin
+
+echo "OPENSTACK GLANCE CREATE ENDPOINTS"
+openstack endpoint create --region RegionOne image public http://${CONTROLLER_NAME}:9292
+openstack endpoint create --region RegionOne image internal http://${CONTROLLER_NAME}:9292
+openstack endpoint create --region RegionOne image admin http://${CONTROLLER_NAME}:9292
+
+echo "OPENSTACK GLANCE PACKAGES AND CONFIG"
+apt-get install -y glance python-glanceclient
+
+#BACKUP original  /etc/glance/glance-api.conf and /etc/glance/glance-registry.conf files
+cp -p   /etc/glance/glance-api.conf   /etc/glance/glance-api.conf.original
+cp -p /etc/glance/glance-registry.conf /etc/glance/glance-registry.conf.original
+
+
+#STORAGE for glance images should be defined in yml ... but not yet :|
+cat > /etc/glance/glance-api.conf <<EOF
+[DEFAULT]
+notification_driver = noop
+
+[database]
+connection = mysql+pymysql://glance:GLANCE_DBPASS@${CONTROLLER_NAME}/glance
+
+[keystone_authtoken]
+auth_uri = http://${CONTROLLER_NAME}:5000
+auth_url = http://${CONTROLLER_NAME}:35357
+auth_plugin = password
+project_domain_id = default
+user_domain_id = default
+project_name = service
+username = glance
+password = ${DEFAULT_PASSWORD}
+
+[paste_deploy]
+flavor = keystone
+
+[glance_store]
+default_store = file
+filesystem_store_datadir = /var/lib/glance/images/
+
+EOF
+
+cat > /etc/glance/glance-registry.conf <<EOF
+[DEFAULT]
+notification_driver = noop
+
+[database]
+connection = mysql+pymysql://glance:GLANCE_DBPASS@${CONTROLLER_NAME}/glance
+
+[keystone_authtoken]
+auth_uri = http://${CONTROLLER_NAME}:5000
+auth_url = http://${CONTROLLER_NAME}:35357
+auth_plugin = password
+project_domain_id = default
+user_domain_id = default
+project_name = service
+username = glance
+password = ${DEFAULT_PASSWORD}
+
+[paste_deploy]
+flavor = keystone
+
+EOF
+
+#Populate database
+su -s /bin/sh -c "glance-manage db_sync" glance
+
+service glance-registry restart
+service glance-api restart
+
+rm -f /var/lib/glance/glance.sqlite
+
+# Force to use API version 2
+echo "export OS_IMAGE_API_VERSION=2" | tee -a admin-openrc.sh demo-openrc.sh
+
+# Download cirros image for testing :)
+CIRROS_VERSION="$(wget http://download.cirros-cloud.net/version/released -qO -)"
+if [ ! -n "${CIRROS_VERSION}"]
+then
+  echo "WARNING: Could not download a valid cirros version ... "
+  echo "WRNING: Image testing could not be executed ..."
+else
+  wget http://download.cirros-cloud.net/${CIRROS_VERSION}/cirros-${CIRROS_VERSION}-x86_64-disk.img -qO /tmp/cirros.img
+  source ${HOME}/admin-openrc.sh && glance image-create --name "cirros" \
+    --file /tmp/cirros.img \
+    --disk-format qcow2 --container-format bare \
+    --visibility public
+
+fi
